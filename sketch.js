@@ -1,583 +1,527 @@
-let gameState = "START"; // START, PLAYING, GAMEOVER, WIN, ATTACKING
-let particles = [];      // 粒子陣列
-let shakeTime = 0;       // 震動計時器
-let bgStars = [];        // 背景星星陣列
-let comets = [];         // 彗星陣列
-let ufos = [];           // 幽浮陣列
-let ufoHum;              // UFO 電磁音效
-let radarBeep;           // 雷達掃描音效
-let lastBeepTime = 0;    // 上次鳴叫時間
-let isOscillatorStarted = false; // 音效啟動標記
-
-// 獵人遊戲變數
-let blocks = [];
-let score = 0;
-let gameTimer = 60;      // 遊戲時限 (秒)
-let startTime = 0;
-let colorOptions = [];
-let nextTargetChange = 0;
-let targetCol = 0;       // 目標欄位
-let targetRow = 0;       // 目標列位
-let combo = 0;           // 連擊數
-let cols, rows;          // 網格行列數
-let cellW, cellH;        // 格子寬高
-let attackScale = 0;     // 飛碟突擊縮放比例
+let stars = [];
+let spaceObjects = []; // 存放隕石、外星人、太空人
+let lasers = [];       // 存放發射中的雷射
+let shakeAmount = 0;   // 畫面抖動強度
+let isWarping = false; // 控制背景模式：false 為星空漂移，true 為前進噴發
+let isAutoPilot = false; // 自動導航開關
+let autoDodgeX = 0;    // 自動導航產生的偏移量
+let autoDodgeY = 0;
+let typewriterTimeout; // 用來儲存打字機計時器，避免重疊執行
+let projects = [
+  { name: "第一週：幾何練習", url: "https://yhe121736-lena.github.io/20260407-1/" },
+  { name: "第二週：變數運用", url: "https://yhe121736-lena.github.io/20260414/" },
+  { name: "第三週：迴圈造型", url: "week3/index.html" },
+  { name: "第四週：互動開發", url: "week4/index.html" }
+];
 
 function setup() {
   createCanvas(windowWidth, windowHeight);
-  // 初始化音效 (使用合成器避免外部檔案載入失敗)
-  ufoHum = new p5.Oscillator('sine');
-  ufoHum.freq(100);
-  ufoHum.amp(0);
-
-  // 初始化雷達嗶嗶音 (使用方波更有科技感)
-  radarBeep = new p5.Oscillator('square');
-  radarBeep.amp(0);
-
-  // 初始化顏色選項
-  colorOptions = [
-    { name: "脈衝紅", value: color(255, 50, 50), code: "#FF3232" },
-    { name: "離子綠", value: color(50, 255, 100), code: "#32FF64" },
-    { name: "超空間藍", value: color(50, 150, 255), code: "#3296FF" },
-    { name: "質子黃", value: color(255, 220, 0), code: "#FFDC00" }
-  ];
-
-  // 計算網格
-  cols = 10;
-  rows = 8;
-
-  createStars();
-  pickTargetCoordinate();
-}
-
-function createStars() {
-  bgStars = [];
+  noCursor(); // 隱藏原生游標，改用自定義 HUD
+  
+  // 背景星空初始化
   for (let i = 0; i < 200; i++) {
-    bgStars.push({
-      x: random(width),
-      y: random(height),
-      size: random(1, 3),
-      brightness: random(100, 255)
-    });
+    stars.push(new Star());
   }
-}
 
-function windowResized() {
-  resizeCanvas(windowWidth, windowHeight);
-  createStars();
-  initGrid();       // 重新計算網格大小
-  comets = [];      // 清空彗星
-  ufos = [];        // 清空幽浮
+  // 初始化太空物件
+  for (let i = 0; i < 3; i++) {
+    spaceObjects.push(new SpaceObject());
+  }
+
+  // 使用 p5.dom createElement 動態生成按鈕選單
+  let menuLabel = createElement('h4', '任務導覽選單');
+  menuLabel.position(30, 20);
+  menuLabel.style('color', '#00f2ff');
+  menuLabel.style('font-family', "'Orbitron', sans-serif");
+
+  for (let i = 0; i < projects.length; i++) {
+    let btn = createButton(projects[i].name);
+    btn.position(30, 60 + i * 40);
+    btn.mousePressed(() => loadProject(projects[i].url));
+    btn.style('background', 'rgba(0, 242, 255, 0.2)');
+    btn.style('color', '#fff');
+    btn.style('font-family', "'Share Tech Mono', monospace");
+    btn.style('border', '1px solid #00f2ff');
+    btn.style('padding', '5px 15px');
+    btn.style('cursor', 'pointer');
+  }
+
+  // 新增：模式切換按鈕
+  let warpBtn = createButton('切換飛行模式');
+  warpBtn.position(30, height - 60);
+  warpBtn.mousePressed(() => { isWarping = !isWarping; });
+  warpBtn.style('background', 'rgba(255, 0, 85, 0.3)');
+  warpBtn.style('color', '#fff');
+  warpBtn.style('font-family', "'Orbitron', sans-serif");
+  warpBtn.style('border', '1px solid #ff0055');
+  warpBtn.style('padding', '5px 15px');
+  warpBtn.style('cursor', 'pointer');
+
+  // 新增：自動導航開關按鈕
+  let autoBtn = createButton('自動導航系統');
+  autoBtn.position(160, height - 60);
+  autoBtn.mousePressed(() => { isAutoPilot = !isAutoPilot; });
+  autoBtn.style('background', 'rgba(0, 255, 150, 0.3)');
+  autoBtn.style('color', '#fff');
+  autoBtn.style('font-family', "'Orbitron', sans-serif");
+  autoBtn.style('border', '1px solid #00ff96');
+  autoBtn.style('padding', '5px 15px');
+  autoBtn.style('cursor', 'pointer');
+
+  // 啟動打字機效果：系統日誌輸出
+  const logText = "<b>> 核心架構：</b>採用 <span style='color: #fff;'>vertex()</span> 陣列實現多維度空間透視。<br><b>> 導航系統：</b>整合 <span style='color: #fff;'>map()</span> 映射函數與物理撞擊反饋邏輯。<br><b>> 資料鏈結：</b>支援透過遠端通訊窗 (iframe) 檢索程式演進數據。系統目前運行正常，穿越隕石帶中...";
+  startTypewriter('log-content', logText, 30);
+
+  // 新增：當滑鼠移入日誌區域時重頭播放
+  select('#reflection-box').mouseOver(() => {
+    startTypewriter('log-content', logText, 30);
+  });
+
+  // 初始化視窗拖動功能
+  initDraggable();
 }
 
 function draw() {
-  // 畫面震動處理
-  if (shakeTime > 0) {
-    let s = map(shakeTime, 0, 30, 2, 15); // 抖動幅度隨時間減弱
-    translate(random(-s, s), random(-s, s));
-    shakeTime--;
-  }
+  background(5, 5, 20); // 深邃太空色
 
-  background(5, 5, 20); // 更深邃的宇宙黑
-  drawStars();          // 繪製背景星星
-  updateAndDrawComets(); // 更新並繪製背景彗星
-  updateAndDrawUFOs();   // 更新並繪製幽浮
-
-  if (gameState === "START") {
-    drawStartScreen();
-  } else if (gameState === "PLAYING") {
-    updateRadarAudio(); // 更新雷達音效頻率
-    updateAndDrawGrid();
-    drawUI();
-    drawCrosshair(); // 加入瞄準準星
-    checkTimer();
-  } else if (gameState === "GAMEOVER") {
-    drawGameOver();
-  } else if (gameState === "ATTACKING") {
-    drawUFOAttack();
-  } else if (gameState === "WIN") {
-    drawWinScreen();
-  }
-
-  // 更新並繪製粒子
-  updateAndDrawParticles();
-}
-
-function drawStars() {
-  noStroke();
-  for (let s of bgStars) {
-    // 讓星星有輕微閃爍感
-    let b = s.brightness + sin(frameCount * 0.05 + s.x) * 50;
-    fill(b, b, 255, 200);
-    ellipse(s.x, s.y, s.size);
-  }
-}
-
-// 彗星系統
-function updateAndDrawComets() {
-  // 1. 產生環境閃爍光效果
-  if (comets.length > 0) {
+  // 處理畫面抖動效果
+  if (shakeAmount > 0) {
     push();
-    // 根據彗星數量計算亮度，並加上正弦波產生閃爍感
-    let ambientAlpha = constrain(comets.length * 10 + sin(frameCount * 0.5) * 8, 0, 45);
-    fill(200, 230, 255, ambientAlpha); // 淡淡的彗星冷色光
-    noStroke();
-    rect(0, 0, width, height);
-    pop();
+    translate(random(-shakeAmount, shakeAmount), random(-shakeAmount, shakeAmount));
+    shakeAmount *= 0.9; // 抖動逐漸減弱 (冷卻)
+    if (shakeAmount < 0.1) shakeAmount = 0;
   }
 
-  // 隨機產生彗星 (約每 120 幀出現一顆)
-  if (random(1) < 0.008) {
-    comets.push({
-      x: random(width),
-      y: -50,
-      vx: random(4, 10),
-      vy: random(4, 10),
-      size: random(2, 4),
-      tailLen: random(15, 30)
-    });
-  }
+  // 計算視差偏移量 (Parallax)
+  let targetX = map(mouseX, 0, width, 20, -20);
+  let targetY = map(mouseY, 0, height, 20, -20);
 
-  for (let i = comets.length - 1; i >= 0; i--) {
-    let c = comets[i];
-    c.x += c.vx;
-    c.y += c.vy;
-
-    // 繪製彗星尾巴 (數個連續縮小的圓點)
-    for (let j = 0; j < c.tailLen; j++) {
-      let tx = c.x - (c.vx * j * 0.8);
-      let ty = c.y - (c.vy * j * 0.8);
-      let alpha = map(j, 0, c.tailLen, 200, 0);
-      let s = map(j, 0, c.tailLen, c.size, 0.5);
-      
-      noStroke();
-      fill(200, 230, 255, alpha);
-      ellipse(tx, ty, s);
+  if (isAutoPilot) {
+    // 1. 尋找最危險的隕石 (距離近且靠近中心)
+    let threat = null;
+    let minDist = width;
+    for (let obj of spaceObjects) {
+      if (obj.type === 'asteroid' && obj.z < width * 0.6) {
+        if (obj.z < minDist) {
+          minDist = obj.z;
+          threat = obj;
+        }
+      }
     }
 
-    // 移除超出螢幕的彗星
-    if (c.x > width + 200 || c.y > height + 200) {
-      comets.splice(i, 1);
-    }
-  }
-}
-
-// 幽浮系統
-function updateAndDrawUFOs() {
-  // 極低機率產生幽浮 (約每 500 幀出現一次)
-  if (random(1) < 0.002) {
-    let direction = random() > 0.5 ? 1 : -1;
-    ufos.push({
-      x: direction === 1 ? -100 : width + 100,
-      y: random(height * 0.2, height * 0.8),
-      vx: random(2, 4) * direction,
-      size: random(30, 50),
-      wobbleOffset: random(TWO_PI)
-    });
-  }
-
-  for (let i = ufos.length - 1; i >= 0; i--) {
-    let u = ufos[i];
-    u.x += u.vx;
-    // 上下漂浮律動
-    let currentY = u.y + sin(frameCount * 0.1 + u.wobbleOffset) * 15;
-
-    // 音效處理：根據 UFO 是否在畫面中調整音量
-    if (ufos.length > 0) {
-      if (getAudioContext().state !== 'running') getAudioContext().resume();
-      ufoHum.start();
-      ufoHum.amp(0.1, 0.1); // 漸強
-      ufoHum.freq(100 + sin(frameCount * 0.2) * 50); // 頻率抖動營造電磁感
+    // 2. 如果有威脅，計算躲避向量
+    if (threat) {
+      // 向隕石的反方向偏移，z 越近偏移越強
+      let dodgePower = map(threat.z, 0, width * 0.6, 80, 0);
+      autoDodgeX = lerp(autoDodgeX, threat.x > 0 ? -dodgePower : dodgePower, 0.1);
+      autoDodgeY = lerp(autoDodgeY, threat.y > 0 ? -dodgePower : dodgePower, 0.1);
     } else {
-      ufoHum.amp(0, 0.5); // 漸弱
+      autoDodgeX = lerp(autoDodgeX, 0, 0.05);
+      autoDodgeY = lerp(autoDodgeY, 0, 0.05);
     }
+  } else {
+    autoDodgeX = lerp(autoDodgeX, 0, 0.1);
+    autoDodgeY = lerp(autoDodgeY, 0, 0.1);
+  }
 
-    // 灑下星塵粒子 (每 3 幀產生一個)
-    if (frameCount % 3 === 0) {
-      particles.push({
-        x: u.x + random(-u.size * 0.3, u.size * 0.3),
-        y: currentY + u.size * 0.1, // 從機身底部灑出
-        vx: u.vx * 0.5 + random(-0.5, 0.5), // 帶有原本幽浮的部分慣性
-        vy: random(0.5, 2), // 緩慢下墜
-        life: 100 + random(50),
-        col: color(100, 255, 255, 180) // 與駕駛艙相同的青色星塵
-      });
+  let moveX = targetX + autoDodgeX;
+  let moveY = targetY + autoDodgeY;
+
+  // 繪製背景星空
+  for (let s of stars) {
+    s.update();
+    s.display(moveX, moveY);
+  }
+
+  // 繪製太空物件
+  for (let obj of spaceObjects) {
+    obj.update();
+    obj.display();
+  }
+
+  // 繪製座艙主體
+  drawSpaceCabin(moveX, moveY);
+  
+  // 繪製 HUD 與 儀表板數據
+  drawShieldEffect();
+  drawHUD(moveX, moveY);
+
+  // 繪製雷射波
+  drawLasers();
+
+  // 新增：撞擊時的紅色警告邊框
+  if (shakeAmount > 2) {
+    noFill();
+    stroke(255, 0, 0, map(shakeAmount, 0, 20, 0, 255)); // 透明度隨抖動強度變化
+    strokeWeight(20);
+    rectMode(CORNER);
+    rect(0, 0, width, height);
+  }
+
+  if (shakeAmount > 0) {
+    pop(); // 結束抖動位移
+  }
+}
+
+// 新增：滑鼠點擊發射雷射
+function mousePressed() {
+  // 檢查是否點擊在左側選單區域，避免誤射
+  if (mouseX < 250) return;
+
+  // 加入新雷射 (壽命 5 幀)
+  lasers.push({ x: mouseX, y: mouseY, life: 5 });
+
+  // 檢查是否擊中太空物件
+  for (let obj of spaceObjects) {
+    if (obj.checkHit(mouseX, mouseY)) {
+      obj.reset();
+      shakeAmount = 8; // 擊碎物件時的小震動
     }
+  }
+}
 
+// 運用 vertex 繪製太空艙透視結構
+function drawSpaceCabin(ox, oy) {
+  noFill();
+  
+  // 根據 shakeAmount 決定顏色：撞擊時變紅，平時為青色
+  if (shakeAmount > 5) {
+    stroke(255, 50, 50, 200); // 警告紅
+  } else {
+    stroke(0, 242, 255, 150); // 航行青
+  }
+  strokeWeight(2);
+
+  // 太空艙框架 (透視效果)
+  // 左側牆面
+  beginShape();
+  vertex(0, 0);
+  vertex(width * 0.2 + ox, height * 0.2 + oy);
+  vertex(width * 0.2 + ox, height * 0.8 + oy);
+  vertex(0, height);
+  endShape();
+
+  // 右側牆面
+  beginShape();
+  vertex(width, 0);
+  vertex(width * 0.8 + ox, height * 0.2 + oy);
+  vertex(width * 0.8 + ox, height * 0.8 + oy);
+  vertex(width, height);
+  endShape();
+
+  // 觀測窗中心框
+  rectMode(CORNERS);
+  rect(width * 0.2 + ox, height * 0.2 + oy, width * 0.8 + ox, height * 0.8 + oy);
+  
+  // 裝飾性的掃描線
+  for (let i = 0; i < height; i += 20) {
+    stroke(0, 242, 255, 15);
+    let scanY = (i + frameCount) % height;
+    line(0, scanY, width, scanY);
+  }
+}
+
+// 新增：自定義 HUD 瞄準鏡與數據顯示
+function drawHUD(ox, oy) {
+  push();
+  // 1. 右上角儀表數據
+  fill(0, 242, 255, 200);
+  textAlign(RIGHT);
+  textFont('Share Tech Mono');
+  textSize(16);
+  let speed = isWarping ? "99,999 KM/S (WARP)" : "1,250 KM/S (CRUISE)";
+  text(`VELOCITY: ${speed}`, width - 30, 40);
+  
+  let shieldStatus = shakeAmount > 5 ? "WARNING: IMPACT" : "SHIELD: STABLE";
+  if (shakeAmount > 5 && frameCount % 10 < 5) fill(255, 0, 0); 
+  text(shieldStatus, width - 30, 65);
+
+  // 3. 自動導航狀態
+  fill(isAutoPilot ? "#00ff96" : "#555");
+  text(`AUTO-PILOT: ${isAutoPilot ? "ACTIVE" : "OFF"}`, width - 30, 90);
+
+  // 2. 自定義滑鼠 HUD
+  translate(mouseX, mouseY);
+  rotate(frameCount * 0.02);
+  noFill();
+  stroke(0, 242, 255, 200);
+  strokeWeight(2);
+  ellipse(0, 0, 40, 40);
+  line(-25, 0, -15, 0);
+  line(25, 0, 15, 0);
+  line(0, -25, 0, -15);
+  line(0, 25, 0, 15);
+  
+  // 隨滑鼠移動的外圈
+  rotate(-frameCount * 0.05);
+  strokeWeight(1);
+  arc(0, 0, 55, 55, 0, PI/2);
+  arc(0, 0, 55, 55, PI, 3*PI/2);
+  pop();
+}
+
+// 新增：護盾碰撞漣漪效果
+function drawShieldEffect() {
+  if (shakeAmount > 5) {
     push();
-    translate(u.x, currentY);
+    noFill();
+    // 使用 shakeAmount 控制漣漪的擴散
+    let rippleSize = map(shakeAmount, 20, 0, 100, width * 1.5);
+    let alpha = map(shakeAmount, 20, 0, 200, 0);
+    stroke(0, 242, 255, alpha);
+    strokeWeight(2);
     
-    // 1. 繪製半透明駕駛艙
-    fill(100, 255, 255, 150);
-    noStroke();
-    arc(0, -u.size * 0.1, u.size * 0.5, u.size * 0.6, PI, TWO_PI);
-
-    // 2. 繪製金屬機身
-    fill(150, 150, 180);
-    ellipse(0, 0, u.size, u.size * 0.4);
-
-    // 3. 繪製底部閃爍燈光
-    let colors = [color(255, 0, 0), color(0, 255, 0), color(255, 255, 0)];
-    let lightIdx = floor(frameCount / 10) % 3;
-    for (let j = -1; j <= 1; j++) {
-      let lightCol = (j + 1 === lightIdx) ? colors[lightIdx] : color(50);
-      fill(lightCol);
-      ellipse(j * u.size * 0.25, u.size * 0.05, u.size * 0.1);
-    }
-    
-    // 4. 側邊推進器微光
-    fill(255, 255, 200, 50);
-    ellipse(0, u.size * 0.1, u.size * 0.8, u.size * 0.1);
+    // 繪製多重圓環模擬護盾
+    ellipse(width/2, height/2, rippleSize, rippleSize * 0.6);
+    ellipse(width/2, height/2, rippleSize * 0.8, rippleSize * 0.5);
     
     pop();
-
-    // 移除超出螢幕的幽浮
-    if (u.x > width + 200 || u.x < -200) {
-      ufos.splice(i, 1);
-      if (ufos.length === 0) ufoHum.amp(0, 0.5); // 沒幽浮時靜音
-    }
   }
 }
 
-function pickTargetCoordinate() {
-  targetCol = floor(random(cols));
-  targetRow = floor(random(rows));
-  nextTargetChange = millis() + 8000; // 8 秒內必須擊落
-}
-
-function updateAndDrawGrid() {
-  // 如果時間到還沒點擊，觸發飛碟攻擊
-  if (millis() > nextTargetChange && gameState === "PLAYING") {
-    gameState = "ATTACKING";
-    attackScale = 0.1;
-  }
-
-  // 檢查是否需要初始化網格
-  if (blocks.length === 0) initGrid();
-
-  for (let i = blocks.length - 1; i >= 0; i--) {
-    blocks[i].display();
-  }
-}
-
-function initGrid() {
-  blocks = [];
-  cellW = width / cols;
-  cellH = (height - 80) / rows; // 扣除頂部 UI 高度
-  for (let i = 0; i < cols; i++) {
-    for (let j = 0; j < rows; j++) {
-      blocks.push(new RadarTarget(i, j));
-    }
-  }
-}
-
-
-function drawUI() {
-  // 頂部科技感邊框
-  fill(0, 180);
-  noStroke();
-  rect(0, 0, width, 80);
-  stroke(100, 255, 255, 100);
-  line(0, 80, width, 80);
-  
-  fill(255);
-  textSize(22);
-  textAlign(LEFT, CENTER);
-  text(`能量: ${score}`, 30, 30);
-  fill(100, 255, 255);
-  textSize(16);
-  text(`Combo: ${combo}`, 30, 55);
-  
-  let remaining = max(0, ceil(gameTimer - (millis() - startTime) / 1000));
-  textAlign(RIGHT, CENTER);
-  fill(255);
-  text(`剩餘時間: ${remaining}s`, width - 30, 40);
-
-  // 飛碟威脅進度條 (8秒倒數)
-  let threatTime = max(0, nextTargetChange - millis());
-  let threatWidth = map(threatTime, 0, 8000, 0, 200);
-  noStroke();
-  fill(255, 50, 50, 150);
-  rect(width/2 - 100, 25, 200, 10, 5);
-  fill(255, 50, 50);
-  rect(width/2 - 100, 25, threatWidth, 10, 5);
-  textAlign(CENTER);
-  textSize(12);
-  text("威脅接近中", width/2, 50);
-
-  // 繪製網格編號 (HUD 風格)
+// 繪製雷射動畫
+function drawLasers() {
   push();
-  textSize(12);
-  textFont('monospace');
-  textAlign(CENTER, CENTER);
-  fill(100, 255, 255, 200);
-  
-  // 加上淡淡的發光感
-  drawingContext.shadowBlur = 5;
-  drawingContext.shadowColor = 'cyan';
-
-  // 頂部欄號 (1-10)
-  for (let i = 0; i < cols; i++) {
-    text(`CH-${i + 1}`, i * cellW + cellW / 2, 72);
-  }
-  // 左側列號 (1-8)
-  for (let j = 0; j < rows; j++) {
-    text(j + 1, 15, j * cellH + cellH / 2 + 80);
+  for (let i = lasers.length - 1; i >= 0; i--) {
+    let l = lasers[i];
+    // 雷射顏色隨生命週期變淡
+    stroke(0, 255, 255, map(l.life, 0, 5, 0, 255));
+    strokeWeight(l.life * 2);
+    // 從太空艙底部兩側射向目標
+    line(0, height, l.x, l.y);
+    line(width, height, l.x, l.y);
+    l.life--;
+    if (l.life <= 0) lasers.splice(i, 1);
   }
   pop();
 }
 
-function updateRadarAudio() {
-  // 只有當滑鼠在網格區域內時才發出聲音
-  if (mouseY < 80) return;
+function loadProject(url) {
+  let container = document.getElementById('gallery-container');
+  let iframe = document.getElementById('project-frame');
 
-  // 獲取目前滑鼠所在的網格座標
-  let mCol = floor(constrain(mouseX / cellW, 0, cols - 1));
-  let mRow = floor(constrain((mouseY - 80) / cellH, 0, rows - 1));
+  // 隨機產生視窗位置 (保持在螢幕可見範圍內)
+  // 視窗寬度為 40%，高度為 60%，因此 left 最大 60%，top 最大 40%
+  let randomX = random(5, 55); // 留一點邊距，範圍在 5% 到 55%
+  let randomY = random(5, 35); // 範圍在 5% 到 35%
+  
+  container.style.left = randomX + '%';
+  container.style.top = randomY + '%';
 
-  // 計算網格距離
-  let d = dist(mCol, mRow, targetCol, targetRow);
-  let maxD = dist(0, 0, cols, rows);
+  container.style.display = 'block';
+  iframe.src = url;
+}
 
-  // 根據距離映射嗶嗶聲的間隔時間 (越近越快，150ms 到 1500ms)
-  let beepInterval = map(d, 0, maxD, 150, 1500);
+// 打字機效果函式：自動跳過 HTML 標籤以確保樣式正確
+function startTypewriter(id, text, speed) {
+  let i = 0;
+  let elem = document.getElementById(id);
+  if (!elem) return;
+  
+  // 每次開始前先清除舊的計時器並清空內容
+  clearTimeout(typewriterTimeout);
+  elem.innerHTML = "";
 
-  if (millis() - lastBeepTime > beepInterval) {
-    // 距離越近音調也越高 (880Hz 到 220Hz)
-    radarBeep.freq(map(d, 0, maxD, 880, 220));
-    radarBeep.amp(0.15, 0.01); // 快速推高音量
-    radarBeep.amp(0, 0.1, 0.05); // 0.05 秒後快速降回 0，形成「嗶」的一聲
-    lastBeepTime = millis();
+  function type() {
+    if (i < text.length) {
+      if (text.charAt(i) === '<') {
+        // 如果遇到 HTML 標籤，一次性跳到標籤結束
+        let tagEnd = text.indexOf('>', i);
+        elem.innerHTML += text.substring(i, tagEnd + 1);
+        i = tagEnd + 1;
+      } else {
+        elem.innerHTML += text.charAt(i);
+        i++;
+      }
+      typewriterTimeout = setTimeout(type, speed);
+    }
+  }
+  type();
+}
+
+// 實作視窗拖動邏輯
+function initDraggable() {
+  let container = document.getElementById('gallery-container');
+  let header = document.getElementById('gallery-header');
+  let iframe = document.getElementById('project-frame');
+  
+  let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
+
+  header.onmousedown = (e) => {
+    e = e || window.event;
+    e.preventDefault();
+    // 記錄初始滑鼠位置
+    pos3 = e.clientX;
+    pos4 = e.clientY;
+    
+    // 拖動時讓視窗半透明
+    container.style.opacity = 0.7;
+    // 拖動時關閉 iframe 的滑鼠事件，避免拖動中斷
+    iframe.style.pointerEvents = 'none';
+
+    document.onmouseup = () => {
+      document.onmouseup = null;
+      document.onmousemove = null;
+      // 放下時恢復不透明
+      container.style.opacity = 1.0;
+      iframe.style.pointerEvents = 'auto'; // 停止拖動後恢復
+    };
+
+    document.onmousemove = (e) => {
+      e = e || window.event;
+      e.preventDefault();
+      // 計算滑鼠位移
+      pos1 = pos3 - e.clientX;
+      pos2 = pos4 - e.clientY;
+      pos3 = e.clientX;
+      pos4 = e.clientY;
+      // 設定新的視窗位置
+      container.style.top = (container.offsetTop - pos2) + "px";
+      container.style.left = (container.offsetLeft - pos1) + "px";
+    };
+  };
+}
+
+class Star {
+  constructor() {
+    this.x = random(-width, width);
+    this.y = random(-height, height);
+    this.z = random(width);
+    this.pz = this.z;
+    this.size = random(1, 3);
+    this.speed = random(10, 20); // 飛行模式的速度
+  }
+  update() {
+    if (isWarping) {
+      this.pz = this.z;
+      this.z -= this.speed;
+      if (this.z < 1) {
+        this.z = width;
+        this.x = random(-width, width);
+        this.y = random(-height, height);
+        this.pz = this.z;
+      }
+    } else {
+      // 一般模式：緩慢橫向移動
+      this.x += 0.5;
+      if (this.x > width) this.x = -width;
+      this.z = width; // 保持固定深度
+      this.pz = this.z;
+    }
+  }
+  display(ox, oy) {
+    let sx = map(this.x / this.z, 0, 1, 0, width) + width / 2;
+    let sy = map(this.y / this.z, 0, 1, 0, height) + height / 2;
+
+    if (isWarping) {
+      stroke(255, 200);
+      strokeWeight(this.size);
+      let px = map(this.x / this.pz, 0, 1, 0, width) + width / 2;
+      let py = map(this.y / this.pz, 0, 1, 0, height) + height / 2;
+      line(px, py, sx, sy);
+    } else {
+      noStroke();
+      fill(255, 200);
+      ellipse(sx + ox, sy + oy, this.size);
+    }
   }
 }
 
-function drawCrosshair() {
-  push();
-  stroke(100, 255, 255, 150);
-  strokeWeight(1);
-  // 長十字線
-  line(mouseX, 80, mouseX, height);
-  line(0, mouseY, width, mouseY);
-  
-  // 瞄準小方框
-  noFill();
-  rectMode(CENTER);
-  rect(mouseX, mouseY, 40, 40);
-  line(mouseX-5, mouseY, mouseX+5, mouseY);
-  line(mouseX, mouseY-5, mouseX, mouseY+5);
-  pop();
-}
+// 新增：太空物件類別（隕石、外星人、太空人）
+class SpaceObject {
+  constructor() {
+    this.reset();
+  }
 
-class RadarTarget {
-  constructor(col, row) {
-    this.col = col;
-    this.row = row;
-    // 計算中心座標
-    this.x = col * cellW + cellW / 2;
-    this.y = row * cellH + cellH / 2 + 80; // 往下偏移 UI 的高度
+  reset() {
+    this.z = width; // 從遠處產生
+    this.type = random(['asteroid', 'alien', 'astronaut']);
+    
+    if (this.type === 'asteroid') {
+      // 隕石設定：讓它們更有機率出現在畫面中心附近，產生直接撞擊感
+      this.x = random(-width * 0.3, width * 0.3);
+      this.y = random(-height * 0.3, height * 0.3);
+      this.speed = random(5, 12); // 隕石通常比較快
+    } else {
+      this.x = random(-width, width);
+      this.y = random(-height, height);
+      this.speed = random(3, 8);
+    }
 
-    this.colorObj = random(colorOptions);
-    this.w = cellW * 0.8;
-    this.h = cellH * 0.8;
-    this.isScanned = false;
+    this.rot = random(TWO_PI);
+    this.rotSpeed = random(-0.05, 0.05);
+  }
+
+  update() {
+    // 飛行模式時速度加快
+    let currentSpeed = isWarping ? this.speed * 5 : this.speed;
+    this.z -= currentSpeed;
+    this.rot += this.rotSpeed;
+
+    // 如果飛出螢幕或到達前方，重置位置
+    if (this.z < 1) {
+      // 如果是隕石，加入隨機機率觸發撞擊抖動，避免過於頻繁
+      if (this.type === 'asteroid' && random(1) < 0.3) { 
+        // 提高撞擊感，只要隕石飛到鏡頭前就有機會抖動
+        shakeAmount = 20; 
+      }
+      this.reset();
+    }
+  }
+
+  // 新增：檢查是否被雷射擊中
+  checkHit(mx, my) {
+    let sx = map(this.x / this.z, 0, 1, 0, width) + width / 2;
+    let sy = map(this.y / this.z, 0, 1, 0, height) + height / 2;
+    let r = map(this.z, 0, width, 50, 2);
+    
+    // 判斷滑鼠點擊是否在物件投影範圍內
+    return dist(mx, my, sx, sy) < r;
   }
 
   display() {
-    // 檢查滑鼠是否懸停在當前格子
-    let isHover = (mouseX > this.x - this.w/2 && mouseX < this.x + this.w/2 &&
-                   mouseY > this.y - this.h/2 && mouseY < this.y + this.h/2);
+    let sx = map(this.x / this.z, 0, 1, 0, width) + width / 2;
+    let sy = map(this.y / this.z, 0, 1, 0, height) + height / 2;
+    let r = map(this.z, 0, width, 50, 2); // 越近越大
 
     push();
-    translate(this.x, this.y);
-    rectMode(CENTER);
-
-    // 繪製靜態網格背景線
-    noFill();
-    stroke(100, 255, 255, 30);
-    strokeWeight(1);
-    rect(0, 0, cellW, cellH);
-
-    if (isHover) {
-      let gridDist = dist(this.col, this.row, targetCol, targetRow);
-      let maxGridDist = dist(0, 0, cols, rows);
-      
-      let factor = map(gridDist, 0, maxGridDist, 1, 0);
-      factor = pow(factor, 2.5); // 讓接近目標時的變化更劇烈
-
-      let isTarget = (this.col === targetCol && this.row === targetRow);
-      let c = isTarget ? color(255, 50, 50) : lerpColor(color(0, 255, 255, 100), color(255, 50, 50), factor);
-
-      // 繪製雷達脈衝波 (越近波越大、越快)
-      let pulseSpeed = map(factor, 0, 1, 2, 8);
-      let circSize = (frameCount * pulseSpeed) % (cellW * (0.5 + factor * 1.5));
-      
-      // 如果是目標，顯示飛碟剪影
-      if (isTarget && factor > 0.8) drawTargetUFO(0, 0, factor * 40);
-
-      noFill();
-      stroke(c);
-      ellipse(0, 0, circSize);
-      ellipse(0, 0, circSize * 0.6);
-    }
-    pop();
-  }
-}
-
-function drawTargetUFO(x, y, sz) {
-  push();
-  translate(x, y);
-  fill(255, 50, 50, 200);
-  noStroke();
-  // 飛碟座艙
-  arc(0, -sz*0.1, sz*0.5, sz*0.6, PI, TWO_PI);
-  // 飛碟主體
-  ellipse(0, 0, sz, sz*0.4);
-  // 底部燈光
-  fill(255, 255, 255);
-  ellipse(0, sz*0.05, sz*0.1);
-  pop();
-}
-
-function drawUFOAttack() {
-  // 計算目標原本在畫面上的中心點
-  let tx = targetCol * cellW + cellW / 2;
-  let ty = targetRow * cellH + cellH / 2 + 80;
-
-  // 飛碟迅速放大
-  attackScale += 0.01; // 大幅降低速度，讓玩家看清楚飛過來的過程
-  let currentSize = attackScale * width;
-  
-  // 畫面震動隨飛船接近而增強 (從輕微抖動變為劇烈震動)
-  shakeTime = floor(map(attackScale, 0.1, 1.5, 5, 30));
-  
-  background(10, 0, 0, 50);
-  drawTargetUFO(tx, ty, currentSize);
-
-  // 當飛碟蓋過全螢幕時失敗
-  if (currentSize > width * 1.5) {
-    gameState = "GAMEOVER";
-  }
-}
-
-function checkTimer() {
-  if (millis() - startTime > gameTimer * 1000) {
-    gameState = "WIN";
-  }
-}
-
-function createExplosion(x, y, col, count) {
-  for (let i = 0; i < count; i++) {
-    particles.push({
-      x: x, y: y,
-      vx: random(-4, 4), vy: random(-4, 4),
-      life: 200, col: col
-    });
-  }
-}
-
-function updateAndDrawParticles() {
-  for (let i = particles.length - 1; i >= 0; i--) {
-    let p = particles[i];
-    p.x += p.vx; p.y += p.vy;
-    p.life -= 5;
-    fill(red(p.col), green(p.col), blue(p.col), p.life);
+    translate(sx, sy);
+    rotate(this.rot);
     noStroke();
-    ellipse(p.x, p.y, map(p.life, 0, 200, 0, 8));
-    if (p.life <= 0) particles.splice(i, 1);
-  }
-}
 
-function drawStartScreen() {
-  // 繪製半透明遮罩讓背景星星若隱若現
-  background(5, 5, 25, 150);
-  
-  fill(100, 255, 255);
-  textAlign(CENTER, CENTER);
-  textFont('monospace');
-  textSize(42);
-  text("★ 星際座標獵人 ★", width / 2, height / 2 - 50);
-  
-  fill(255);
-  textSize(16);
-  let instructions = "【 任務簡報 】\n\n1. 移動滑鼠進行網格探索，偵測隱藏的外星飛船\n2. 越接近目標，雷達波越劇烈、頻率越快\n3. 必須在飛船發動突襲前點擊座標將其擊落\n4. 連續擊落可獲得 Combo 加成";
-  text(instructions, width / 2, height / 2 + 80);
-  textSize(20);
-  // 閃爍效果的提示文字
-  let blink = map(sin(frameCount * 0.1), -1, 1, 100, 255);
-  fill(100, 255, 255, blink);
-  text(">>> 初始化系統：點擊進入駕駛艙 <<<", width / 2, height / 2 + 220);
-  
-  // 裝飾用 UI 線條
-  stroke(100, 255, 255, 50);
-  line(width/2 - 150, height/2 - 20, width/2 + 150, height/2 - 20);
-}
-
-function drawGameOver() {
-  background(50, 0, 0, 150);
-  fill(255);
-  textAlign(CENTER);
-  textSize(40);
-  text("任務失敗", width / 2, height / 2);
-  textSize(20);
-  text("點擊畫面返回主選單", width / 2, height / 2 + 50);
-}
-
-function drawWinScreen() {
-  background(0, 50, 0, 150);
-  fill(255);
-  textAlign(CENTER);
-  textSize(40);
-  text("任務完成！", width / 2, height / 2 - 30);
-  textSize(24);
-  text(`最終收穫能量: ${score}`, width / 2, height / 2 + 20);
-  textSize(18);
-  text("點擊畫面返回主選單", width / 2, height / 2 + 80);
-}
-
-function mousePressed() {
-  if (!isOscillatorStarted) {
-    userStartAudio();
-    ufoHum.start();
-    ufoHum.amp(0);
-    radarBeep.start();
-    radarBeep.amp(0);
-    isOscillatorStarted = true;
-  }
-
-  if (gameState === "PLAYING") {
-    // 檢查點擊是否命中亮起的目標
-    let hit = false;
-    for (let b of blocks) {
-      // 檢查是否點擊在格子範圍內
-      if (mouseX > b.x - b.w/2 && mouseX < b.x + b.w/2 &&
-          mouseY > b.y - b.h/2 && mouseY < b.y + b.h/2) {
-        if (b.col === targetCol && b.row === targetRow) {
-          score += (10 + combo);
-          combo++;
-          createExplosion(b.x, b.y, color(255, 255, 0), 20);
-          pickTargetCoordinate(); // 成功後立即換下一個座標
-        } else {
-          score = max(0, score - 5);
-          combo = 0;
-          shakeTime = 30; // 延長抖動時間，配合 draw 中的新邏輯會更劇烈
-          createExplosion(b.x, b.y, color(255, 0, 0), 10);
-        }
-        hit = true;
-        break;
+    if (this.type === 'asteroid') {
+      // 繪製隕石 (不規則圓形)
+      fill(100, 80, 70);
+      beginShape();
+      for(let a=0; a<TWO_PI; a+=0.5) {
+        let offset = random(r*0.8, r*1.2);
+        vertex(cos(a)*offset, sin(a)*offset);
       }
+      endShape(CLOSE);
+    } 
+    else if (this.type === 'alien') {
+      // 繪製外星人 (綠色頭部)
+      fill(0, 255, 100);
+      ellipse(0, 0, r, r * 1.2);
+      fill(0);
+      ellipse(-r/4, -r/10, r/3, r/5); // 左眼
+      ellipse(r/4, -r/10, r/3, r/5);  // 右眼
+    } 
+    else if (this.type === 'astronaut') {
+      // 繪製太空人 (簡化版：頭盔與身體)
+      fill(255);
+      noStroke();
+      rectMode(CENTER);
+      rect(0, r/2, r, r); // 身體
+      fill(200, 230, 255);
+      ellipse(0, 0, r*0.8, r*0.7); // 頭盔鏡面
+
+      stroke(255);
+      strokeWeight(r/10);
+      noFill();
+      arc(0, r/2, r*1.5, r, 0, PI); // 氧氣管線
     }
-  } else if (gameState === "START") {
-    // 從主頁點擊：正式初始化並開始遊戲
-    score = 0;
-    combo = 0;
-    attackScale = 0;
-    blocks = [];
-    particles = [];
-    startTime = millis();
-    pickTargetCoordinate();
-    gameState = "PLAYING";
-  } else {
-    // 從結束或攻擊畫面點擊：回到主選單
-    gameState = "START";
+
+    pop();
   }
 }
